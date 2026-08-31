@@ -6,3 +6,4 @@ psycopg2-binary
 scikit-learn
 xgboost
 sqlalchemy
+anthropic
