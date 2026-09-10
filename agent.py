@@ -41,11 +41,11 @@ except Exception as e:
 LSF_BASE_URL = "https://livingstonesglobal.online/designconnect/v1/chat/completions"
 MODEL = "gpt-4o"
 
-# ── DATABASE SCHEMA CONTEXT ───────────────────────────────────────────────────
+# ── DATABASE SCHEMA ───────────────────────────────────────────────────────────
 DB_SCHEMA = """
-You have access to a PostgreSQL database with the following tables:
+Tables in PostgreSQL database:
 
-1. lumenindex_combined (main table)
+1. lumenindex_combined (PRIMARY TABLE - use this most)
    - country VARCHAR: 17 LATAM countries
    - year INTEGER: 1990 to 2020
    - female_lfp_rate NUMERIC: female labor force participation rate (%)
@@ -60,55 +60,41 @@ You have access to a PostgreSQL database with the following tables:
    - poverty_headcount NUMERIC: poverty headcount ratio (%)
    - rural_pop_pct NUMERIC: rural population (%)
 
-2. female_labor_force_latam
-   - country, year, lfp_rate
-
-3. chile_development_indicators
-   - country (Chile only), indicator_name, indicator_code, year, value
-
-4. asti_agricultural_research
-   - country, year, indicator, value
-
-5. latam_poverty
-   - country, year, poverty_headcount
+2. female_labor_force_latam: country, year, lfp_rate
+3. chile_development_indicators: country, indicator_name, indicator_code, year, value
+4. asti_agricultural_research: country, year, indicator, value
+5. latam_poverty: country, year, poverty_headcount
 
 Countries: Argentina, Bolivia, Brazil, Chile, Colombia, Costa Rica,
 Dominican Republic, Ecuador, El Salvador, Guatemala, Honduras,
 Mexico, Nicaragua, Panama, Paraguay, Peru, Uruguay.
-
-Chile is the only High tier country (LumenIndex score 73.9).
-All others are Medium tier (scores 38-51).
 """
 
-SQL_SYSTEM_PROMPT = f"""You are a PostgreSQL expert. Given a question about LATAM development data, 
-write ONLY a valid PostgreSQL SQL query. Return ONLY the SQL query, nothing else — no explanation, 
-no markdown, no code blocks, just raw SQL.
+SQL_SYSTEM_PROMPT = f"""You are a PostgreSQL expert. Write a SQL query to answer the user's question.
+Return ONLY the raw SQL query. No explanation, no markdown, no code blocks, just the SQL.
 
-Database schema:
 {DB_SCHEMA}
 
 Rules:
 - Use lumenindex_combined as primary table
-- Filter NULL values with IS NOT NULL
-- Round numbers with ROUND(value::numeric, 2)
+- Filter NULLs with IS NOT NULL where needed
+- Use ROUND(value::numeric, 2) for numbers
 - Always ORDER BY results
-- LIMIT 20 rows maximum
-- Return ONLY the SQL query, no other text"""
+- LIMIT 20 rows max
+- Return ONLY raw SQL, nothing else"""
 
 INSIGHT_SYSTEM_PROMPT = """You are the LumenIndex AI Agent for Living Stones Foundation.
-You help non-technical stakeholders understand rural development data for Latin America.
+Your job is to explain development data insights for Latin America to non-technical stakeholders.
 
-Your responses should be:
-- Clear and in plain English
-- Warm and insightful
-- Connected to rural development and social impact
-- Free of any technical jargon, SQL, or database references
-
-Never mention SQL, queries, tables, or databases. Just answer the question directly."""
+Rules:
+- Answer in clear, plain English only
+- Never mention SQL, queries, tables, databases, or technical terms
+- Be warm, insightful, and connect findings to rural development impact
+- Keep answers concise and actionable"""
 
 # ── HELPER FUNCTIONS ──────────────────────────────────────────────────────────
 def clean_response(text: str) -> str:
-    """Remove any SQL or code blocks from response text"""
+    """Remove any SQL or code blocks from response"""
     text = re.sub(r'```sql.*?```', '', text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r'```SQL.*?```', '', text, flags=re.DOTALL | re.IGNORECASE)
     text = re.sub(r'```.*?```', '', text, flags=re.DOTALL)
@@ -147,29 +133,39 @@ def execute_query(sql: str) -> pd.DataFrame:
     except Exception as e:
         return pd.DataFrame({'Error': [str(e)]})
 
+def extract_sql(sql_response: str) -> str:
+    """Extract clean SQL from GPT response"""
+    sql = sql_response.strip()
+    # Remove markdown code blocks
+    sql = re.sub(r'```sql\s*', '', sql, flags=re.IGNORECASE)
+    sql = re.sub(r'```\s*', '', sql)
+    sql = sql.strip()
+    # Find SELECT statement if buried in text
+    if 'SELECT' in sql.upper():
+        select_idx = sql.upper().find('SELECT')
+        sql = sql[select_idx:]
+    return sql.strip()
+
 # ── MAIN AGENT FUNCTION ───────────────────────────────────────────────────────
 def query_agent(user_question: str, conversation_history: list) -> tuple:
     """
-    Step 1: Get SQL from GPT-4o (SQL-only call)
-    Step 2: Execute SQL against Neon
-    Step 3: Get plain English interpretation (no SQL)
+    Step 1: GPT-4o generates SQL (hidden from user)
+    Step 2: SQL executes against Neon PostgreSQL (hidden)
+    Step 3: GPT-4o interprets results in plain English (shown to user)
     """
 
-    # Step 1: Get SQL only
-    sql_messages = [{"role": "user", "content": f"Write a SQL query to answer: {user_question}"}]
+    # Step 1: Get SQL silently
+    sql_messages = [{"role": "user", "content": f"Write SQL to answer: {user_question}"}]
     sql_response = call_lsf(sql_messages, SQL_SYSTEM_PROMPT)
 
-    # Clean up SQL response
-    sql_query = sql_response.strip()
-    sql_query = re.sub(r'```sql\s*', '', sql_query, flags=re.IGNORECASE)
-    sql_query = re.sub(r'```\s*', '', sql_query)
-    sql_query = sql_query.strip()
+    # Extract clean SQL
+    sql_query = extract_sql(sql_response)
 
     df_result = None
     response_text = ""
 
-    # Step 2: Execute SQL
-    if sql_query and len(sql_query) > 10:
+    # Step 2: Execute SQL if valid
+    if sql_query and 'SELECT' in sql_query.upper():
         df_result = execute_query(sql_query)
 
         if not df_result.empty and 'Error' not in df_result.columns:
@@ -177,17 +173,26 @@ def query_agent(user_question: str, conversation_history: list) -> tuple:
 
             # Step 3: Get plain English interpretation
             insight_messages = conversation_history + [
-                {"role": "user", "content": f"""Question: {user_question}
+                {"role": "user", "content": f"""Question asked: {user_question}
 
-Data results:
+Data retrieved:
 {data_str}
 
-Please answer the question in plain English with key insights about what this means for rural development in Latin America. Do not mention SQL, queries, or databases."""}
+Please answer the question in plain English with key insights about what this means for rural development in Latin America. Be warm and insightful. Do not mention SQL, databases, or technical terms."""}
             ]
             response_text = call_lsf(insight_messages, INSIGHT_SYSTEM_PROMPT)
             response_text = clean_response(response_text)
+
+        elif 'Error' in df_result.columns:
+            # SQL error — try answering generally
+            general_messages = conversation_history + [
+                {"role": "user", "content": user_question}
+            ]
+            response_text = call_lsf(general_messages, INSIGHT_SYSTEM_PROMPT)
+            response_text = clean_response(response_text)
+            df_result = None
         else:
-            response_text = "I couldn't find data to answer that question. Could you try rephrasing it?"
+            response_text = "No data found for that query. Try asking about a different country or time period."
     else:
         # No SQL needed — general question
         general_messages = conversation_history + [
