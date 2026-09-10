@@ -20,11 +20,13 @@ st.set_page_config(
 # ── CONFIGURATION ─────────────────────────────────────────────────────────────
 try:
     LSF_TOKEN = st.secrets["LSF_TOKEN"]
-    st.write(f"Token starts with: {LSF_TOKEN[:8]}")
     DATABASE_URL = st.secrets["DATABASE_URL"]
-except:
-    LSF_TOKEN = os.getenv("LSF_TOKEN", "ls-YOUR_TOKEN_HERE")
-    DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://neondb_owner:YOUR_PASSWORD@ep-curly-fire-ata7105s.c-9.us-east-1.aws.neon.tech/neondb?sslmode=require")
+except KeyError as e:
+    st.error(f"Missing secret: {e}")
+    st.stop()
+except Exception as e:
+    st.error(f"Secrets error: {e}")
+    st.stop()
 
 LSF_BASE_URL = "https://livingstonesglobal.online/designconnect/v1/chat/completions"
 MODEL = "gpt-4o"
