@@ -20,6 +20,7 @@ st.set_page_config(
 # ── CONFIGURATION ─────────────────────────────────────────────────────────────
 try:
     LSF_TOKEN = st.secrets["LSF_TOKEN"]
+    st.write(f"Token starts with: {LSF_TOKEN[:8]}")
     DATABASE_URL = st.secrets["DATABASE_URL"]
 except:
     LSF_TOKEN = os.getenv("LSF_TOKEN", "ls-YOUR_TOKEN_HERE")
