@@ -169,7 +169,7 @@ def query_agent(user_question: str, conversation_history: list) -> tuple:
     response_text = ""
 
     # Step 2: Execute SQL
-    if sql_query.upper().startswith("SELECT"):
+    if sql_query and len(sql_query) > 10:
         df_result = execute_query(sql_query)
 
         if not df_result.empty and 'Error' not in df_result.columns:
